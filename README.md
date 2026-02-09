@@ -121,3 +121,261 @@ Por ejemplo, puede elegir el mejor servicio de IA para una tarea específica, co
 - Diseño de prompts: Proporciona herramientas para la ingeniería de prompts, incluyendo diseño, pruebas y optimización de prompts para mejorar el rendimiento y la precisión de los modelos de IA.
 
 - Filtros: Controles sobre cuándo y cómo se ejecutan las funciones para mejorar la seguridad y las prácticas de IA responsable.
+
+## Técnicas principales de IA generativa
+
+### Fundamentos de Aplicaciones de chatbots
+
+Los chatbots son aplicaciones de IA generativa que interactúan con los usuarios a través de texto o voz, proporcionando respuestas y asistencia en tiempo real. Para construir un chatbot efectivo, es importante comprender los fundamentos de su diseño e implementación.
+
+Una forma común de construir un chatbot es utilizando un modelo de lenguaje grande (LLM) para generar respuestas basadas en las entradas del usuario.
+
+```csharp Chatbot básico con un LLM en .NET
+var githubEndpoint = new Uri("https://models.github.ai/inference");
+var githubToken = "your_github_token_here";
+var modelName = "Phi-4-mini-instruct";
+var uri = "http://localhost:11434";
+
+// Using a model hosted on GitHub Models
+IChatClient client = new ChatCompletionsClient(
+        endpoint: new Uri("https://models.github.ai/inference"),
+        new AzureKeyCredential(githubToken))
+        .AsIChatClient(modelName);
+
+// Using a local model
+var localClient = new OllamaClient(uri, modelName).AsIChatClient();
+
+// Here we're building the prompt
+StringBuilder prompt = new StringBuilder();
+prompt.AppendLine("You will analyze the sentiment of the following product reviews. Each line is its own review. Output the sentiment of each review in a bulleted list and then provide a generate sentiment of all reviews. ");
+prompt.AppendLine("I bought this product and it's amazing. I love it!");
+prompt.AppendLine("This product is terrible. I hate it.");
+prompt.AppendLine("I'm not sure about this product. It's okay.");
+prompt.AppendLine("I found this product based on the other reviews. It worked for a bit, and then it didn't.");
+
+// Send the prompt to the model and wait for the text completion
+var response = await client.GetResponseAsync(prompt.ToString());
+
+// Display the response
+Console.WriteLine(response.Text);
+```
+
+#### Function calling
+
+Permite a los chatbots llamar a funciones o APIs externas para obtener información adicional o realizar acciones específicas. Esto puede mejorar la capacidad del chatbot para proporcionar respuestas precisas y relevantes.
+
+```csharp Function calling example
+﻿using Azure.AI.Inference;
+using Azure;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
+using System.ComponentModel;
+
+var githubToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+if (string.IsNullOrEmpty(githubToken))
+{
+    var config = new ConfigurationBuilder().AddUserSecrets<Program>().Build();
+    githubToken = config["GITHUB_TOKEN"];
+}
+
+ChatOptions options = new ChatOptions
+{
+    Tools = [
+        AIFunctionFactory.Create(GetTheWeather)
+    ]
+};
+
+
+IChatClient client = new ChatCompletionsClient(
+    endpoint: new Uri("https://models.github.ai/inference"),
+    new AzureKeyCredential(githubToken))
+    .AsIChatClient("gpt-4o-mini")
+    .AsBuilder()
+    .UseFunctionInvocation()
+    .Build();
+
+var question = "Do I need an umbrella today?";
+Console.WriteLine($"question: {question}");
+var response = await client.GetResponseAsync(question, options);
+Console.WriteLine($"response: {response}");
+
+
+[Description("Get the weather")]
+static string GetTheWeather()
+{
+    var temperature = Random.Shared.Next(5, 20);
+    var conditions = Random.Shared.Next(0, 1) == 0 ? "sunny" : "rainy";
+    var weatherInfo = $"The weather is {temperature} degrees C and {conditions}.";
+    Console.WriteLine($"\tFunction Call - Returning weather info: {weatherInfo}");
+    return weatherInfo;
+}
+```
+
+### Retrieval Augmented Generation (RAG)
+
+RAG es una técnica que combina la generación de texto con la recuperación de información. En lugar de depender únicamente del conocimiento almacenado en el modelo, RAG permite a los chatbots recuperar información relevante de una base de datos o fuente externa para generar respuestas más precisas y actualizadas.
+
+Hay 2 fases principales en RAG:
+
+1. **Recuperación**: El chatbot utiliza un modelo de lenguaje para generar una consulta basada en la entrada del usuario. Esta consulta se utiliza para recuperar información relevante de una base de datos o fuente externa, como documentos, artículos o datos estructurados.
+
+2. **Generación**: El chatbot utiliza la información recuperada junto con la entrada del usuario para generar una respuesta coherente y relevante. Esto permite al chatbot proporcionar respuestas más precisas y actualizadas, ya que puede acceder a información que no está almacenada en el modelo.
+
+```mermaid
+graph TB
+    subgraph USER[Usuario]
+        INPUT[Entrada del usuario]
+    end
+
+    subgraph CHATBOT[Chatbot RAG]
+        QUERY[Generación de consulta]
+        RETRIEVE[Recuperación de información]
+        GENERATE[Generación de respuesta]
+    end
+
+    subgraph DATABASE[Base de datos externa]
+        DOCS[Documentos relevantes]
+    end
+
+    INPUT --> QUERY
+    QUERY --> RETRIEVE
+    RETRIEVE --> DOCS
+    DOCS --> GENERATE
+    INPUT --> GENERATE
+    GENERATE --> OUTPUT[Respuesta generada]
+
+    style CHATBOT fill:#0078d4,stroke:#004578,stroke-width:3px,color:#fff
+    style USER fill:#00a4ef,stroke:#0078d4,stroke-width:2px,color:#fff
+    style DATABASE fill:#50e6ff,stroke:#00a4ef,stroke-width:2px
+```
+
+#### Embedings
+
+En la fase de recupoeración de RAG, no se quiere recuperar toda la información de la base de datos, sino solo la información relevante para la consulta del usuario. Para esto se utilizan los embeddings, que son representaciones vectoriales de texto que capturan su significado y relaciones. Al convertir tanto la consulta del usuario como los documentos en la base de datos en embeddings, el chatbot puede comparar estos vectores para identificar qué documentos son más relevantes para la consulta y recuperarlos para la generación de la respuesta.
+
+Se necesita comparar la consulta del usuario con la base de datos, de forma que se pueda recuperar la información relevante mínima para generar la respuesta.
+
+#### Implementación de RAG en .NET
+
+Para los ejemplos se utilizarán las librerías `Microsoft.Extensions.AI` junto con `Micrososft.Extensions. VectorData` y `Microsoft.SemanticKernel.Connectors.InMemory`
+
+```csharp RAG implementation example
+// Este ejemplo demuestra RAG completo (Retrieval Augmented Generation):
+// 1. Recuperación: Buscar información relevante usando embeddings
+// 2. Generación: Usar un LLM para generar una respuesta con el contexto recuperado
+
+// POCO Class
+public class Movie
+{
+    [VectorStoreKey]
+    public int Key { get; set; }
+
+    [VectorStoreData]
+    public string Title { get; set; }
+
+    [VectorStoreData]
+    public string Description { get; set; }
+
+    [VectorStoreVector(384, DistanceFunction.CosineSimilarity)]
+    public ReadOnlyMemory<float> Vector { get; set; }
+}
+
+// Este ejemplo demuestra RAG (Retrieval Augmented Generation) usando GitHub Models para embeddings.
+using Azure;
+using Azure.AI.Inference;
+using Microsoft.Extensions.AI;
+using Microsoft.SemanticKernel.Connectors.InMemory;
+
+// ====== FASE DE PREPARACIÓN: Configurar el almacén de vectores ======
+// Crear un almacén de vectores en memoria para guardar los embeddings
+// Los embeddings son representaciones numéricas que capturan el significado del texto
+var vectorStore = new InMemoryVectorStore();
+
+// Obtener la colección donde se almacenarán las películas con sus vectores
+// Cada película tendrá un vector que representa su descripción
+var movies = vectorStore.GetCollection<int, MovieVector<int>>("movies");
+await movies.EnsureCollectionExistsAsync();
+var movieData = MovieFactory<int>.GetMovieVectorList();
+
+// ====== FASE DE GENERACIÓN DE EMBEDDINGS ======
+// Configurar el generador de embeddings que convertirá texto en vectores numéricos
+var githubToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+    ?? throw new InvalidOperationException("Missing GITHUB_TOKEN environment variable. Set it to use GitHub Models.");
+
+// El generador de embeddings transforma texto en vectores de números flotantes
+// Textos con significados similares tendrán vectores similares
+IEmbeddingGenerator<string, Embedding<float>> generator =
+    new EmbeddingsClient(
+        endpoint: new Uri("https://models.github.ai/inference"),
+        new AzureKeyCredential(githubToken))
+    .AsIEmbeddingGenerator("text-embedding-3-small");
+
+// Generar embeddings para cada película y almacenarlos en la base de datos vectorial
+// Esto es la fase de "indexación" - preparar los datos para búsquedas rápidas
+foreach (var movie in movieData)
+{
+    // Convertir la descripción de la película en un vector numérico
+    movie.Vector = await generator.GenerateVectorAsync(movie.Description);
+    // Insertar o actualizar la película con su embedding en el almacén
+    await movies.UpsertAsync(movie);
+}
+
+// ====== FASE DE RECUPERACIÓN (Retrieval) ======
+// Esta es la primera fase de RAG: buscar información relevante
+var query = "A family friendly movie that includes ogres and dragons";
+
+// Convertir la consulta del usuario en un embedding usando el mismo generador
+// Esto permite comparar la consulta con las películas almacenadas
+var queryEmbedding = await generator.GenerateVectorAsync(query);
+
+// Buscar en el almacén vectorial las películas más similares a la consulta
+// La búsqueda compara el vector de la consulta con los vectores de las películas
+// y devuelve las más cercanas (top: 2 = las 2 más relevantes)
+var searchResults = movies.SearchAsync(queryEmbedding, top: 2);
+
+// ====== FASE DE GENERACIÓN (Augmented Generation) ======
+// Esta es la segunda fase de RAG: usar el contexto recuperado para generar una respuesta
+
+// Configurar el cliente de chat que generará la respuesta final
+IChatClient chatClient = new ChatCompletionsClient(
+    endpoint: new Uri("https://models.github.ai/inference"),
+    new AzureKeyCredential(githubToken))
+    .AsIChatClient("gpt-4o-mini");
+
+// Crear una conversación con un prompt del sistema que define el comportamiento del bot
+List<ChatMessage> conversation = new()
+{
+    new ChatMessage(ChatRole.System,
+        "Eres un asistente útil que recomienda películas. " +
+        "Usa la información proporcionada sobre películas disponibles para responder a las preguntas del usuario.")
+};
+
+// Añadir la pregunta del usuario a la conversación
+conversation.Add(new ChatMessage(ChatRole.User, query));
+
+// Añadir el contexto recuperado a la conversación
+// Cada resultado de búsqueda se añade como información adicional para el modelo
+await foreach (var result in searchResults)
+{
+    conversation.Add(new ChatMessage(ChatRole.User,
+        $"Esta película está disponible: {result.Record.Title} y trata sobre {result.Record.Description}"));
+
+    // Mostrar información de los resultados recuperados
+    Console.WriteLine($"[Recuperado] {result.Record.Title} (Score: {result.Score:F4})");
+}
+
+Console.WriteLine(); // Línea en blanco para separar
+
+// Enviar toda la conversación (pregunta + contexto) al modelo de lenguaje
+// El LLM generará una respuesta basada en la información recuperada
+var response = await chatClient.CompleteAsync(conversation);
+
+// Añadir la respuesta del asistente a la conversación (útil para múltiples turnos)
+conversation.Add(new ChatMessage(ChatRole.Assistant, response.Message.Text));
+
+// Mostrar la respuesta generada por el LLM
+Console.WriteLine($"Bot:> {response.Message.Text}");
+
+// RESULTADO: El bot habrá generado una respuesta personalizada usando el contexto
+// de las películas recuperadas, en lugar de simplemente listar los resultados de búsqueda.
+```
